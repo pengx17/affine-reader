@@ -1,5 +1,10 @@
 import * as Y from "yjs";
 import { pageDocToMD, workspaceDocToPagesMeta } from "./parser";
+import {
+  createWorkspaceFromUpdate,
+  createPageFromUpdate,
+} from "./adapters/blocksuite";
+import { pageToMarkdown } from "./adapters/markdown";
 
 interface ReaderConfig {
   workspaceId: string; // root workspace id
@@ -61,7 +66,7 @@ export const getBlocksuiteReader = (config: ReaderConfig) => {
         );
       }
 
-      return await response.arrayBuffer();
+      return new Uint8Array(await response.arrayBuffer());
     } catch (err) {
       console.error("Error getting workspace doc: ", err);
       return null;
@@ -97,17 +102,16 @@ export const getBlocksuiteReader = (config: ReaderConfig) => {
    * Get doc by id
    *
    * @param docId
-   * @param buffer
    * @returns
    */
-  const getDoc = async (docId = workspaceId, buffer?: ArrayBuffer) => {
-    const updates = buffer ?? (await getDocBinary(docId));
+  const getDoc = async (docId = workspaceId) => {
+    const updates = await getDocBinary(docId);
     if (!updates) {
       return null;
     }
     try {
       const doc = new YY.Doc();
-      YY.applyUpdate(doc, new Uint8Array(updates));
+      YY.applyUpdate(doc, updates);
       return doc;
     } catch (err) {
       console.error(`Error applying update, ${docId}: `, err);
@@ -128,17 +132,18 @@ export const getBlocksuiteReader = (config: ReaderConfig) => {
     defaultResourcesUrls.blob(target, workspaceId, id);
 
   const getDocMarkdown = async (docId = workspaceId) => {
-    const doc = await getDoc(docId);
-    if (!doc) {
+    const [rootDocUpdate, pageDocUpdate] = await Promise.all([
+      getDocBinary(workspaceId), // cache root doc?
+      getDocBinary(docId),
+    ]);
+    if (!rootDocUpdate || !pageDocUpdate) {
       return null;
     }
-    const result = pageDocToMD(
-      workspaceId,
-      target,
-      doc,
-      config.blobUrlHandler ?? defaultBlobUrlHandler
-    );
-    return result;
+    const workspace = createWorkspaceFromUpdate(workspaceId, rootDocUpdate);
+    const page = await createPageFromUpdate(docId, workspace, pageDocUpdate);
+
+    const markdown = pageToMarkdown(page);
+    return markdown;
   };
 
   return {
